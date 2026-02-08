@@ -1,38 +1,39 @@
-# Smart Video Downloader - Backend API
+# 🎬 Universal Video Downloader Backend
 
-Python Flask backend for video downloading application.
+A powerful Flask-based backend API for downloading videos from 15+ platforms using yt-dlp.
 
-## Features
-- Extract video info from multiple platforms
-- Get available formats
-- Download videos in different qualities
-- REST API endpoints
+## ✨ Features
 
-## API Endpoints
-- `GET /api/health` - Health check
-- `POST /api/analyze` - Analyze video URL
-- `POST /api/formats` - Get available formats
-- `POST /api/download` - Download video
+- **Multi-Platform Support**: Download from YouTube, Facebook, Instagram, Twitter/X, TikTok, and 12+ more platforms
+- **Multiple Formats**: Support for video (MP4) and audio (MP3/M4A) formats
+- **Smart Format Selection**: Choose from best, worst, or specific resolutions
+- **FFmpeg Integration**: Automatic audio extraction and format conversion
+- **Clean REST API**: Easy-to-use endpoints for integration
+- **File Management**: Automatic cleanup of old files
 
-## Setup
-1. Clone this repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Run locally: `python app.py`
-4. The server will run on `http://localhost:5000`
+## 🚀 Quick Start
 
-## Environment Variables
-- `PORT` - Server port (default: 5000)
+### Prerequisites
+- Python 3.8 or higher
+- FFmpeg (recommended for audio conversion)
+- Git
 
-## Supported Platforms
-- YouTube
-- Instagram
-- TikTok
-- Facebook
-- Twitter/X
+### Installation
 
-## Deployment
-Deployed on Render: https://video-downloader-backend.onrender.com
+1. **Clone and setup**:
+```bash
+# Create project directory
+mkdir video-downloader-backend
+cd video-downloader-backend
 
-## Frontend
-Frontend is hosted separately on GitHub Pages:
-[Frontend Repository](https://github.com/yourusername/video-downloader-frontend)
+# Create virtual environment (optional but recommended)
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On Mac/Linux:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
