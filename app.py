@@ -10,10 +10,15 @@ from datetime import datetime
 import tempfile
 import traceback
 import subprocess
-import urllib.parse  # Added at the top
+import urllib.parse
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# Fixed CORS configuration - no credentials with wildcard origin
+CORS(app, resources={
+    r"/api/*": {"origins": "*"},
+    r"/*": {"origins": "*"}
+})
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -83,9 +88,12 @@ def sanitize_filename(filename):
     if not filename:
         return f"video_{uuid.uuid4().hex[:8]}.mp4"
     
+    # Replace problematic characters
     filename = re.sub(r'[<>:"/\\|?*]', '', filename)
     filename = re.sub(r'\s+', ' ', filename).strip()
     filename = filename.replace('|', '-').replace('/', '-')
+    # Remove emoji and other special characters
+    filename = filename.encode('ascii', 'ignore').decode('ascii')
     return filename[:150] if filename else f"video_{uuid.uuid4().hex[:8]}.mp4"
 
 def format_file_size(size_bytes):
@@ -155,8 +163,10 @@ def get_video_info(url):
             'skip_download': True,
             'socket_timeout': 30,
             'retries': 3,
-            'ignoreerrors': False,
+            'ignoreerrors': True,  # Changed to True to prevent crashes
+            'noplaylist': True,     # Added to handle playlists safely
             'no_color': True,
+            'no_cache_dir': True,    # Added for stability
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -170,6 +180,11 @@ def get_video_info(url):
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            
+            # Handle playlist by taking first entry
+            if info and 'entries' in info:
+                logger.info("Playlist detected, using first video")
+                info = info['entries'][0]
         
         if not info:
             return None, "Failed to extract video information"
@@ -325,6 +340,50 @@ def get_video_info(url):
 
 # ------------------ Routes ------------------
 
+# Redirect routes for frontend compatibility
+@app.route('/analyze', methods=['POST', 'OPTIONS'])
+def analyze_redirect():
+    """Redirect /analyze to /api/analyze"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    return analyze()
+
+@app.route('/formats', methods=['POST', 'OPTIONS'])
+def formats_redirect():
+    """Redirect /formats to /api/formats"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    return get_formats()
+
+@app.route('/download', methods=['POST', 'OPTIONS'])
+def download_redirect():
+    """Redirect /download to /api/download"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    return download()
+
+@app.route('/platforms', methods=['GET', 'OPTIONS'])
+def platforms_redirect():
+    """Redirect /platforms to /api/platforms"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    return platforms()
+
+@app.route('/test', methods=['GET', 'OPTIONS'])
+def test_redirect():
+    """Redirect /test to /api/test"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    return test()
+
+@app.route('/health', methods=['GET', 'OPTIONS'])
+def health_redirect():
+    """Redirect /health to /api/health"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    return health()
+
+# API Routes
 @app.route("/api/health", methods=["GET"])
 def health():
     """Health check endpoint"""
@@ -451,6 +510,7 @@ def get_formats():
 @app.route("/api/download", methods=["POST"])
 def download():
     """Download video or audio - ALL PLATFORMS"""
+    temp_files = []
     try:
         clean_old_files()
         data = request.get_json(silent=True) or {}
@@ -503,27 +563,29 @@ def download():
             headers['Referer'] = 'https://www.google.com/'
         
         # Configure yt-dlp options
+        base_opts = {
+            'quiet': False,
+            'no_warnings': True,
+            'socket_timeout': 30,
+            'retries': 5,
+            'fragment_retries': 5,
+            'ignoreerrors': True,
+            'noplaylist': True,
+            'no_cache_dir': True,
+            'concurrent_fragment_downloads': 5,
+            'ratelimit': None,
+            'http_headers': headers,
+        }
+        
         if is_mp3:
             # For MP3 download
             ydl_opts = {
+                **base_opts,
                 'format': 'bestaudio/best',
                 'outtmpl': os.path.join(DOWNLOADS_DIR, f'{uid}_%(title)s.%(ext)s'),
-                'quiet': False,
-                'no_warnings': True,
-                'socket_timeout': 30,
-                'retries': 5,
-                'fragment_retries': 5,
-                'ignoreerrors': True,
-                'ratelimit': None,
-                'http_headers': headers,
-                'extractor_args': {
-                    'youtube': {'format': 'bestaudio'},
-                    'facebook': {'format': 'best'},
-                    'twitter': {'format': 'best'},
-                }
             }
             
-            # Add postprocessor only if FFmpeg is available
+            # Add postprocessor for MP3
             if ffmpeg_available:
                 ydl_opts['postprocessors'] = [{
                     'key': 'FFmpegExtractAudio',
@@ -536,22 +598,12 @@ def download():
         elif is_m4a:
             # For M4A download
             ydl_opts = {
-                'format': 'bestaudio/best',
+                **base_opts,
+                'format': 'bestaudio[ext=m4a]/bestaudio',
                 'outtmpl': os.path.join(DOWNLOADS_DIR, f'{uid}_%(title)s.%(ext)s'),
-                'quiet': False,
-                'no_warnings': True,
-                'socket_timeout': 30,
-                'retries': 5,
-                'fragment_retries': 5,
-                'ignoreerrors': True,
-                'ratelimit': None,
-                'http_headers': headers,
-                'extractor_args': {
-                    'youtube': {'format': 'bestaudio'},
-                }
             }
             
-            # Add postprocessor only if FFmpeg is available
+            # Add postprocessor for M4A
             if ffmpeg_available:
                 ydl_opts['postprocessors'] = [{
                     'key': 'FFmpegExtractAudio',
@@ -562,7 +614,6 @@ def download():
         else:
             # For video download - Smart format selection
             if format_id == 'best':
-                # Try to get best quality with audio included
                 format_selector = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
             elif format_id == 'worst':
                 format_selector = 'worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]/worst'
@@ -570,28 +621,16 @@ def download():
                 format_selector = format_id
             
             ydl_opts = {
+                **base_opts,
                 'format': format_selector,
                 'outtmpl': os.path.join(DOWNLOADS_DIR, f'{uid}_%(title)s.%(ext)s'),
-                'quiet': False,
-                'no_warnings': True,
-                'socket_timeout': 30,
-                'retries': 5,
-                'fragment_retries': 5,
-                'ignoreerrors': True,
-                'ratelimit': None,
-                'http_headers': headers,
-                'extractor_args': {
-                    'youtube': {'format': format_selector},
-                    'facebook': {'format': 'best'},
-                    'twitter': {'format': 'best'},
-                }
             }
             
             # Add postprocessor for merging audio+video if FFmpeg available
             if ffmpeg_available:
                 ydl_opts['postprocessors'] = [{
                     'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4',
+                    'preferedformat': 'mp4',  # Fixed: using 'preferedformat' (one 'r') which is correct for yt-dlp
                 }]
         
         logger.info(f"Starting download from {platform}: {cleaned_url}")
@@ -601,18 +640,26 @@ def download():
         # Perform download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(cleaned_url, download=True)
+            
+            # Handle playlist by taking first entry
+            if info and 'entries' in info:
+                logger.info("Playlist detected, using first video")
+                info = info['entries'][0]
         
         # Find the downloaded file
         downloaded_files = []
         for file in os.listdir(DOWNLOADS_DIR):
             if file.startswith(uid):
                 downloaded_files.append(file)
+                temp_files.append(os.path.join(DOWNLOADS_DIR, file))
         
         if not downloaded_files:
             # Search for any file that might have been downloaded
             for file in os.listdir(DOWNLOADS_DIR):
-                if os.path.getmtime(os.path.join(DOWNLOADS_DIR, file)) > datetime.now().timestamp() - 300:
+                file_path = os.path.join(DOWNLOADS_DIR, file)
+                if os.path.getmtime(file_path) > datetime.now().timestamp() - 300:
                     downloaded_files.append(file)
+                    temp_files.append(file_path)
                     break
         
         if not downloaded_files:
@@ -638,43 +685,47 @@ def download():
                         resolution = f"_{fmt['height']}p"
                         break
             
-            # Check if it's mp4, if not rename to mp4
-            base_name, ext = os.path.splitext(original_file)
-            if ext.lower() != '.mp4':
-                final_filename = f"{safe_title}{resolution}.mp4"
-            else:
-                final_filename = f"{safe_title}{resolution}{ext}"
+            final_filename = f"{safe_title}{resolution}.mp4"
         
         final_filename = sanitize_filename(final_filename)
         final_path = os.path.join(DOWNLOADS_DIR, final_filename)
         
-        # Rename file
-        if original_file != final_path:
+        # Check if file exists and rename
+        file_size = 0
+        if os.path.exists(original_file):
+            # If final path is different from original, rename
+            if original_file != final_path:
+                # Remove existing file if it exists
+                if os.path.exists(final_path):
+                    os.remove(final_path)
+                # Rename the file
+                os.rename(original_file, final_path)
+                logger.info(f"Renamed {original_file} to {final_path}")
+            
+            # Get file size
             if os.path.exists(final_path):
-                os.remove(final_path)
-            os.rename(original_file, final_path)
-        
-        # Get file size
-        file_size = os.path.getsize(final_path) if os.path.exists(final_path) else 0
-        
-        logger.info(f"Download completed: {final_filename} ({format_file_size(file_size)}) from {platform}")
-        
-        # Generate download URL
-        base_url = request.host_url.rstrip('/')
-        download_url = f"{base_url}/api/download-file/{final_filename}"
-        
-        return jsonify({
-            "success": True,
-            "filename": final_filename,
-            "download_url": download_url,
-            "size": format_file_size(file_size),
-            "size_bytes": file_size,
-            "platform": platform,
-            "has_audio": True,
-            "has_video": not is_audio,
-            "ffmpeg_used": ffmpeg_available,
-            "message": f"Download from {platform} completed successfully."
-        })
+                file_size = os.path.getsize(final_path)
+            
+            logger.info(f"Download completed: {final_filename} ({format_file_size(file_size)}) from {platform}")
+            
+            # Generate download URL
+            base_url = request.host_url.rstrip('/')
+            download_url = f"{base_url}/api/download-file/{final_filename}"
+            
+            return jsonify({
+                "success": True,
+                "filename": final_filename,
+                "download_url": download_url,
+                "size": format_file_size(file_size),
+                "size_bytes": file_size,
+                "platform": platform,
+                "has_audio": True,
+                "has_video": not is_audio,
+                "ffmpeg_used": ffmpeg_available,
+                "message": f"Download from {platform} completed successfully."
+            })
+        else:
+            raise Exception("Downloaded file not found")
             
     except yt_dlp.utils.DownloadError as e:
         logger.error(f"yt-dlp DownloadError: {str(e)}")
@@ -688,8 +739,8 @@ def download():
 def download_file(filename):
     """Serve downloaded file"""
     try:
-        # Sanitize filename for security
-        safe_filename = sanitize_filename(filename)
+        # Security: Use basename to prevent path traversal
+        safe_filename = os.path.basename(filename)
         path = os.path.join(DOWNLOADS_DIR, safe_filename)
 
         if not os.path.exists(path):
